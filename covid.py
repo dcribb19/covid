@@ -1,16 +1,15 @@
 from datetime import date, datetime, timedelta
-from typing import List
 from kaleido.scopes.plotly import PlotlyScope
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 from sodapy import Socrata
-import plotly.express as px
+from typing import List, Tuple
 
-# More info:
+# Data source/more info:
 # https://dev.socrata.com/foundry/data.cdc.gov/9mfq-cb36
 # ('https://data.cdc.gov/Case-Surveillance/United-States-'
 #  'COVID-19-Cases-and-Deaths-by-State-o/9mfq-cb36')
-
 
 # Get data.
 client = Socrata('data.cdc.gov', None)
@@ -24,7 +23,7 @@ df = pd.DataFrame.from_records(results)
 df['submission_date'] = pd.to_datetime(
     df['submission_date'], format='%Y-%m-%d'
     )
-
+# Convert new_case and tot_cases columns to int.
 df['new_case'] = df['new_case'].astype(float).astype(int)
 df['tot_cases'] = df['tot_cases'].astype(int)
 
@@ -46,17 +45,18 @@ def date_range(start_date: date, end_date: date) -> List[str]:
 
 
 def get_cases(date_str: str, df=df):
-    """Return data for a given date 'YYYY-MM-DD'"""
+    """Returns data from dataframe for a given date YYYY-MM-DD."""
     new_cases = df[df['submission_date'] == f'{date_str}']
     return new_cases
 
 
-def create_fig(date_str: str, total: str):
-    if total not in ['new', 'total']:
-        raise ValueError("total must be 'new' or 'total'.")
-
+def create_fig(date_str: str, new=True):
+    '''Returns a plotly go.Figure() for a given date YYYY-MM-DD
+    for either new cases or total cases.'''
     cases = get_cases(date_str)
-    if total == 'new':
+    # new_tot = cases['new_case'].sum()
+    if new:
+        scope = 'New'
         fig = go.Figure(data=go.Choropleth(
             locations=cases['state'],
             z=cases['new_case'],
@@ -67,7 +67,8 @@ def create_fig(date_str: str, total: str):
             colorbar_title='Total Cases'
             )
         )
-    else:  # total == 'total'
+    else:
+        scope = 'Total'
         fig = go.Figure(data=go.Choropleth(
             locations=cases['state'],
             z=cases['tot_cases'],
@@ -79,34 +80,69 @@ def create_fig(date_str: str, total: str):
 
     full_date = datetime.strptime(date_str, '%Y-%m-%d').strftime('%B %d, %Y')
     fig.update_layout(
-        title_text=f'{total.title()} COVID-19 Cases - {full_date}',
+        title_text=f'{scope} COVID-19 Cases - {full_date}',
         title_x=0.5,
         geo_scope='usa',
     )
     return fig
 
 
-def plot_new_cases(date_str: str):
-    fig = create_fig(date_str, total='new')
+def plot_cases(date_str: str, new=True):
+    '''Creates an interactive plot for either new/total cases
+    for a given date YYYY-MM-DD.'''
+    fig = create_fig(date_str, new)
     fig.show()
 
 
-def plot_total_cases(date_str: str):
-    fig = create_fig(date_str, total='total')
+def save_fig(date_str, new=True):
+    '''Saves either new/total plot for a given date YYYY-MM-DD
+    as a .png file.'''
+    if new:
+        kind = 'new'
+    else:
+        kind = 'total'
+
+    fig = create_fig(date_str, new)
+    scope = PlotlyScope()
+    with open(f'{kind}_cases/{date_str}_{kind}_cases.png', 'wb') as f:
+        f.write(scope.transform(fig, format='png'))
+
+
+def calc_7_day_avg(column: Tuple):
+    averages = []
+    for x in range(len(column)):
+        if x < 7:
+            averages.append(round(sum(column[:x+1]) / (x + 1)))
+        else:
+            averages.append(round(sum(column[x - 7:x + 1]) / 7))
+    return averages
+
+
+def state_line(state_abbr: str = None, df=df):
+    '''Plot new cases vs. 7-day avg. If no state_abbr, plot entire country.'''
+    # TODO: COMMENT
+    # TODO: Look at negative values reported (throws off figure scale, eg.NY).
+    if state_abbr is None:
+        state_abbr = 'USA'
+        state = df.groupby('submission_date', as_index=False)['new_case'].sum()
+    else:
+        state = df[df['state'] == state_abbr]
+
+    new_cases = tuple(state['new_case'])
+    state = state[['submission_date', 'new_case']]
+    state['avg_7_day'] = calc_7_day_avg(new_cases)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=state['submission_date'],
+                         y=state['new_case'],
+                         name='New Cases')
+                  )
+    fig.add_trace(go.Scatter(x=state['submission_date'],
+                             y=state['avg_7_day'],
+                             name='7 Day Avg')
+                  )
+    fig.update_layout(title_text=f'COVID-19 in {state_abbr}',
+                      title_x=0.5)
+    fig.update_xaxes(title_text='Date')
+    fig.update_yaxes(title_text='New Cases')
     fig.show()
-
-
-def save_new_fig(date_str):
-    '''Saves figure as a png file.'''
-    fig = create_fig(date_str, total='new')
-    scope = PlotlyScope()
-    with open(f'new_cases/{date_str}_new_cases.png', 'wb') as f:
-        f.write(scope.transform(fig, format='png'))
-
-
-def save_total_fig(date_str):
-    '''Saves figure as a png file.'''
-    fig = create_fig(date_str, total='total')
-    scope = PlotlyScope()
-    with open(f'total_cases/{date_str}_total_cases.png', 'wb') as f:
-        f.write(scope.transform(fig, format='png'))
