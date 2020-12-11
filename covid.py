@@ -14,7 +14,7 @@ from typing import List, Tuple
 # Get data.
 client = Socrata('data.cdc.gov', None)
 # Use None for public data set.
-results = client.get('9mfq-cb36', limit=20000)
+results = client.get('9mfq-cb36', limit=25000)
 # May need to adjust limit as time goes on. (Original 20_000)
 
 # Create and format DataFrame.
@@ -54,8 +54,8 @@ def create_fig(date_str: str, new=True):
     '''Returns a plotly go.Figure() for a given date YYYY-MM-DD
     for either new cases or total cases.'''
     cases = get_cases(date_str)
-    # new_tot = cases['new_case'].sum()
     if new:
+        total = cases['new_case'].sum()
         scope = 'New'
         fig = go.Figure(data=go.Choropleth(
             locations=cases['state'],
@@ -68,6 +68,7 @@ def create_fig(date_str: str, new=True):
             )
         )
     else:
+        total = cases['tot_cases'].sum()
         scope = 'Total'
         fig = go.Figure(data=go.Choropleth(
             locations=cases['state'],
@@ -80,7 +81,7 @@ def create_fig(date_str: str, new=True):
 
     full_date = datetime.strptime(date_str, '%Y-%m-%d').strftime('%B %d, %Y')
     fig.update_layout(
-        title_text=f'{scope} COVID-19 Cases - {full_date}',
+        title_text=f'{total:,} {scope} COVID-19 Cases - {full_date}',
         title_x=0.5,
         geo_scope='usa',
     )
@@ -108,13 +109,67 @@ def save_fig(date_str, new=True):
         f.write(scope.transform(fig, format='png'))
 
 
+def plot_new_all_dates():
+    '''Plots new cases for all dates with a slider to select date.'''
+    d_range = date_range(date(2020, 1, 22), (date.today() - timedelta(days=1)))
+
+    fig = go.Figure()
+    new_totals = []
+
+    for dt in d_range:
+        cases = df.query(f'submission_date == "{dt}"')
+        new_totals.append(cases['new_case'].sum())
+        fig.add_trace(
+            go.Choropleth(
+                locations=cases['state'],
+                z=cases['new_case'],
+                locationmode='USA-states',
+                name='',
+                visible=False,
+                colorscale='reds',
+                zmin=0,
+                zmax=cases['new_case'].max() + 1,
+                colorbar_title='Total Cases'
+                )
+        )
+
+    fig.data[-1].visible = True
+
+    steps = []
+    for i in range(len(fig.data)):
+        step = dict(
+            method='update',
+            label=d_range[i],
+            args=[{'visible': [False] * len(fig.data)},
+                  {'title': f"{new_totals[i]:,} New COVID-19 Cases - {datetime.strptime(d_range[i], '%Y-%m-%d').strftime('%B %d, %Y')}"}],
+        )
+        step['args'][0]['visible'][i] = True
+        steps.append(step)
+
+    sliders = [dict(
+        active=len(steps) - 1,
+        steps=steps,
+        tickcolor='white',
+        font={'color': 'white'}
+    )]
+
+    fig.update_layout(
+        title_text=f"{new_totals[-1]:,} New COVID-19 Cases - {datetime.strptime(d_range[-1], '%Y-%m-%d').strftime('%B %d, %Y')}",
+        title_x=0.5,
+        geo_scope='usa',
+        sliders=sliders
+    )
+
+    fig.show()
+
+
 def calc_7_day_avg(column: Tuple):
     averages = []
     for x in range(len(column)):
         if x < 7:
-            averages.append(round(sum(column[:x+1]) / (x + 1)))
+            averages.append(round(sum(column[:x + 1]) / (x + 1)))
         else:
-            averages.append(round(sum(column[x - 7:x + 1]) / 7))
+            averages.append(round(sum(column[x - 6:x + 1]) / 7))
     return averages
 
 
@@ -146,3 +201,9 @@ def state_line(state_abbr: str = None, df=df):
     fig.update_xaxes(title_text='Date')
     fig.update_yaxes(title_text='New Cases')
     fig.show()
+
+
+if __name__ == '__main__':
+    state_line()
+    state_line('VA')
+    plot_new_all_dates()
